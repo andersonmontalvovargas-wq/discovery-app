@@ -1,7 +1,7 @@
-"""Spanish trailer-style voice-over (Kokoro TTS, offline) aligned to the showreel beats.
+"""Spanish voice-over, neutral Latin American accent and natural delivery (Kokoro TTS, offline) aligned to the showreel beats.
 
 Each line has a time window and a beat: the line is placed so that the onset of its LAST word lands exactly
-on that beat (120 BPM grid). Writes build/vo.npy (44.1 kHz mono, 20 s), mixed by audio.py.
+on that beat (120 BPM grid). Writes build/vo.npy (48 kHz mono, 20 s), mixed by audio.py.
 
 Needs `pip install kokoro-onnx soundfile` and kokoro-v1.0.onnx + voices-v1.0.bin from
 https://github.com/thewh1teagle/kokoro-onnx/releases/tag/model-files-v1.0 in $KOKORO_DIR (default ./models).
@@ -14,9 +14,12 @@ from scipy.signal import resample_poly
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MODELS = os.environ.get("KOKORO_DIR", os.path.join(HERE, "models"))
-VOICE_MIX = {"em_alex": 0.65, "am_eric": 0.35}  # young, energetic male timbre with Spanish diction
-BASE_SPEED = 1.12
-SR = 44100
+VOICE_MIX = {"em_alex": 0.70, "am_liam": 0.30}  # young adult male (median F0 ~130 Hz), Spanish diction
+LANG = "es-419"  # neutral Latin American Spanish (seseo) instead of Castilian
+BASE_SPEED = 1.0  # natural pace; only sped up when a line would not fit its window
+MAX_SPEED = 1.3
+MAX_SPEED_WORD = 1.6  # one-word hits must fit in half a beat
+SR = 48000
 DUR = 20.0
 
 # (window start, window end, beat for the last word, text). English brands spelled as pronounced.
@@ -26,9 +29,9 @@ LINES = [
     (5.15, 8.95, 8.0, "Anuncios en Meta y Gúgol Ads que convierten laiks en ventas."),
     (9.10, 12.95, 12.0, "Del anuncio al imeil, cada lid se convierte en venta."),
     (13.10, 16.40, 15.5, "Más retorno. Menos costo. Crecimiento real."),
-    (16.50, 16.98, 16.5, "¡Atrae!"),
-    (17.00, 17.48, 17.0, "¡Convierte!"),
-    (17.50, 17.98, 17.5, "¡Escala!"),
+    (16.50, 16.98, 16.5, "Atrae."),
+    (17.00, 17.48, 17.0, "Convierte."),
+    (17.50, 18.25, 17.5, "Escala."),
     (18.30, 19.70, 19.0, "Grouz Lab."),
 ]
 
@@ -54,7 +57,7 @@ def last_word_onset(phrase, word_dur, sr):
 
 
 def synth(k, voice, text, speed):
-    s, sr = k.create(text, voice=voice, speed=speed, lang="es")
+    s, sr = k.create(text, voice=voice, speed=speed, lang=LANG)
     return trim(np.asarray(s, dtype=np.float64), sr), sr
 
 
@@ -64,7 +67,7 @@ def main():
     out = np.zeros(int(SR * DUR))
     for w0, w1, beat, text in LINES:
         single = len(text.split()) == 1
-        speed = BASE_SPEED
+        speed, cap = BASE_SPEED, (MAX_SPEED_WORD if single else MAX_SPEED)
         for _ in range(6):
             s, sr = synth(k, voice, text, speed)
             if single:
@@ -75,9 +78,9 @@ def main():
                 onset = last_word_onset(s, len(wd) / sr, sr)
             start, end = beat - onset, beat - onset + len(s) / sr
             over = max(w0 - start, 0) + max(end - w1, 0)
-            if over <= 0.005 or speed >= 1.7:
+            if over <= 0.005 or speed >= cap:
                 break
-            speed = min(1.7, speed * (1 + over / (len(s) / sr)) * 1.03)
+            speed = min(cap, speed * (1 + over / (len(s) / sr)) * 1.03)
         s = resample_poly(s, SR, sr)
         s /= np.max(np.abs(s)) + 1e-9
         keep = int((w1 - start) * SR)  # never spill past the window: short fade at its end

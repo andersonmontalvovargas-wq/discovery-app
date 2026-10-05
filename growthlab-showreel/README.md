@@ -9,8 +9,9 @@ Everything is made with code:
   the frames into ffmpeg.
 - **Music.** `audio.py` synthesizes an original 120 BPM track in D minor with NumPy/SciPy: kick, clap, hi-hats,
   sidechained bass, pads, an arpeggio, risers, impacts and UI foley.
-- **Voice-over.** `voiceover.py` generates Spanish VO offline with Kokoro TTS, using a 65 % `em_alex` +
-  35 % `am_eric` voice blend.
+- **Voice-over.** `voiceover.py` generates Spanish VO offline with Kokoro TTS. It uses a young adult male voice
+  (a 70 % `em_alex` + 30 % `am_liam` blend, median pitch about 130 Hz) with a neutral Latin American accent
+  (`es-419`) and a natural pace.
 
 **GrowthLab is a fictional brand** created for this piece. Its logo (a rounded square with rising bars and a
 growth arrow) is drawn in code. The reel uses no third-party logos.
@@ -47,9 +48,17 @@ These elements run for the whole reel:
   | 8.0 s | Anuncios en Meta y Google Ads que convierten likes en ventas. |
   | 12.0 s | Del anuncio al email, cada lead se convierte en venta. |
   | 15.5 s | Más retorno. Menos costo. Crecimiento real. |
-  | 16.5 / 17 / 17.5 s | ¡Atrae! ¡Convierte! ¡Escala! |
+  | 16.5 / 17 / 17.5 s | Atrae. Convierte. Escala. |
   | 19.0 s | GrowthLab. |
-- **Mix.** The music ducks automatically under the voice (envelope follower), and the kick drives a sidechain pump. The master is normalized to −13 LUFS with peaks at or below −1 dBTP.
+- **Voice tone.** Neutral and conversational: speed 1.0, sped up only when a line would not fit its window (one-word hits up to 1.6x). The voice gets no saturation or trailer effects.
+- **Sound quality.**
+  - The track is rendered at 48 kHz.
+  - Oscillators are band-limited (PolyBLEP), so high notes don't alias. Hats use metallic partials instead of pure hiss.
+  - The reverb is stereo, with early reflections, a 25 ms pre-delay and a low cut at 220 Hz on the return.
+  - The voice chain is a high-pass filter, a de-esser, a 3:1 compressor and a presence boost.
+  - The music automatically ducks 11 dB under the voice, which puts the voice about +14 dB above the music in the 300 Hz–4 kHz speech band. The kick drives a smooth sidechain pump on the music.
+  - The master chain is EQ, a glue compressor and a look-ahead limiter (no clipping), followed by TPDF dither.
+  - `build.sh` applies two-pass linear `loudnorm`: −14 LUFS with true peak at or below −1 dBTP. The audio is encoded as AAC 256 kbps at 48 kHz.
 
 ## Files
 
@@ -58,8 +67,8 @@ These elements run for the whole reel:
 | `index.html` | The animation. Open it in a browser to watch it in real time; `index.html?t=7.2` freezes one frame. |
 | `render.cjs` | Frame-by-frame renderer. `node render.cjs` writes `build/video.mp4`; `node render.cjs --stills 3 7.5` writes test frames. |
 | `audio.py` | Music, sound effects and the final mix (`build/audio.wav`). |
-| `voiceover.py` | Kokoro TTS voice-over aligned to the beats (`build/vo.npy`). |
-| `build.sh` | Full pipeline: render, voice, music, then a 2-pass H.264 encode (5 Mbps) and AAC 192k mux into `growthlab-showreel.mp4`. |
+| `voiceover.py` | Kokoro TTS voice-over (neutral Latin American accent) aligned to the beats (`build/vo.npy`). |
+| `build.sh` | Full pipeline: render, voice, music, then a 2-pass H.264 encode (5 Mbps), two-pass loudness normalization and AAC 256k / 48 kHz mux into `growthlab-showreel.mp4`. |
 | `fonts/` | Local Google Fonts: Montserrat (display, 900), Space Grotesk (UI) and JetBrains Mono (technical labels). |
 | `web/index.html` | Share page: a monitor-framed player, a "Ver con sonido" button and a clickable scene list. |
 

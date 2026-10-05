@@ -3,14 +3,19 @@
 120 BPM, D minor (Dm-Bb-F-C). Kick / clap / hats, sidechained bass, pads, arpeggio, risers into every cut,
 impacts on every transition, UI foley synced to the animation (pops, taps, typing, coins) and a big logo hit.
 The voice-over (build/vo.npy from voiceover.py) ducks the music automatically. Writes build/audio.wav.
+
+Quality notes: 48 kHz, band-limited (PolyBLEP) oscillators so nothing aliases, stereo reverb with pre-delay and a
+low-cut return, a light VO chain (high-pass, de-esser, compressor) instead of saturation, and a clean master
+(EQ, glue compressor, look-ahead peak limiter). Final loudness is set in build.sh with two-pass loudnorm.
 """
 import os
 import wave
 
 import numpy as np
+from scipy.ndimage import maximum_filter1d, minimum_filter1d, uniform_filter1d
 from scipy.signal import butter, fftconvolve, sosfilt
 
-SR = 44100
+SR = 48000
 DUR = 20.0
 N = int(SR * DUR)
 BEAT = 0.5
@@ -60,8 +65,18 @@ def noise(dur):
 
 
 def saw(freq, dur, detune=0.0):
-    ph = (tt(dur) * freq * (1 + detune) + rng.random()) % 1.0
-    return 2 * ph - 1
+    """PolyBLEP saw: removes the aliasing a naive ramp produces at high notes."""
+    f = freq * (1 + detune)
+    dt = f / SR
+    ph = (tt(dur) * f + rng.random()) % 1.0
+    out = 2 * ph - 1
+    a = ph < dt
+    x = ph[a] / dt
+    out[a] -= x + x - x * x - 1
+    b = ph > 1 - dt
+    x = (ph[b] - 1) / dt
+    out[b] -= x * x + x + x + 1
+    return out
 
 
 def in_break(t):
@@ -73,8 +88,9 @@ def kick(big=False):
     t = tt(0.65 if big else 0.4)
     f = 42 + (150 if big else 115) * np.exp(-t * 30)
     body = np.sin(2 * np.pi * np.cumsum(f) / SR) * np.exp(-t * (4 if big else 8))
-    click = filt(noise(len(t) / SR), "highpass", 2500) * np.exp(-t * 300) * 0.4
-    return np.tanh((body + click) * 2.0)
+    click = filt(noise(len(t) / SR), "bandpass", [2500, 7000]) * np.exp(-t * 400) * 0.25
+    s = np.tanh(body * 1.4) / np.tanh(1.4) + click
+    return s * np.minimum(1, t * 2000)
 
 
 def clap():
@@ -86,20 +102,25 @@ def clap():
 
 def hat(open_=False):
     d = 0.24 if open_ else 0.05
-    return filt(noise(d), "highpass", 7800) * np.exp(-tt(d) * (13 if open_ else 75))
+    n = filt(noise(d), "bandpass", [7000, 15000], 2)
+    t = tt(d)
+    # a few inharmonic square-ish partials give a metallic hat instead of pure hiss
+    metal = sum(np.sign(np.sin(2 * np.pi * f * t)) for f in (5400, 6900, 8200, 10500)) / 4
+    return (n * 0.8 + filt(metal, "highpass", 6500) * 0.35) * np.exp(-t * (12 if open_ else 70))
 
 
 def pluck(m, dur=0.22, bright=4200):
     t = tt(dur)
     f = mtof(m)
-    s = np.sign(np.sin(2 * np.pi * f * t)) * 0.3 + saw(f, dur) * 0.4 + np.sin(2 * np.pi * f * t) * 0.6
-    return filt(s, "lowpass", bright) * np.exp(-t * 15) * np.minimum(1, t * 400)
+    s = saw(f, dur) * 0.45 + saw(f, dur, 0.004) * 0.25 + np.sin(2 * np.pi * f * t) * 0.6
+    return filt(s, "lowpass", bright) * np.exp(-t * 15) * np.minimum(1, t * 600)
 
 
 def bassnote(m, dur):
     t = tt(dur)
     s = saw(mtof(m), dur) + 0.7 * np.sin(2 * np.pi * mtof(m - 12) * t)
-    return np.tanh(filt(s, "lowpass", 380) * 1.8) * np.minimum(1, t * 220) * np.exp(-t * 3)
+    s = np.tanh(filt(s, "lowpass", 420) * 1.3) / np.tanh(1.3)
+    return s * np.minimum(1, t * 300) * np.minimum(1, np.clip(dur - t, 0, None) * 200) * np.exp(-t * 3)
 
 
 def pad(notes, dur, cutoff=1500, attack=0.4):
@@ -112,7 +133,7 @@ def pad(notes, dur, cutoff=1500, attack=0.4):
 def riser(dur, top=14):
     t = tt(dur)
     ramp = (t / dur) ** 2.4
-    n = filt(noise(dur), "highpass", 1200) * ramp * 0.5
+    n = filt(noise(dur), "bandpass", [1200, 9000]) * ramp * 0.4
     sw = np.sin(2 * np.pi * np.cumsum(220 * (top ** (t / dur))) / SR) * ramp * 0.22
     return n + sw
 
@@ -121,8 +142,9 @@ def impact(scale=1.0, dur=1.6):
     t = tt(dur)
     boom = np.sin(2 * np.pi * np.cumsum(30 + 70 * np.exp(-t * 9)) / SR) * np.exp(-t * 2.4)
     rumble = filt(noise(dur), "lowpass", 380) * np.exp(-t * 5) * 0.6
-    crash = filt(noise(dur), "highpass", 3200) * np.exp(-t * 3) * 0.35
-    return (np.tanh((boom + rumble) * 1.6) + crash) * scale
+    crash = filt(noise(dur), "bandpass", [3000, 12000]) * np.exp(-t * 3) * 0.28
+    low = np.tanh((boom + rumble) * 1.3) / np.tanh(1.3)
+    return (low + crash) * scale * np.minimum(1, t * 3000)
 
 
 def whoosh(dur=0.5, lo=500, hi=4500):
@@ -162,9 +184,11 @@ def chime(notes, step=0.07, dur=0.5):
 
 
 def glitch_burst(dur=0.3):
-    s = np.sign(np.sin(2 * np.pi * np.cumsum(rng.choice([180, 600, 1400, 90], int(dur * SR))) / SR))
+    f = np.repeat(rng.choice([180, 600, 1400, 90], int(dur * 120) + 1), SR // 120 + 1)[: int(dur * SR)]
+    s = np.sin(2 * np.pi * np.cumsum(f) / SR) * 0.8
     s *= np.repeat(rng.random(int(dur * 60) + 1) > 0.35, int(SR / 60) + 1)[: int(dur * SR)]
-    return filt(s, "lowpass", 6000) * 0.35
+    s *= np.minimum(1, tt(dur) * 400) * np.minimum(1, np.clip(dur - tt(dur), 0, None) * 100)
+    return filt(s, "lowpass", 5000) * 0.35
 
 
 # ---- arrangement ------------------------------------------------------------------
@@ -299,44 +323,103 @@ add(music, BOOM, pad([26, 38, 50, 57, 62, 65, 69, 76], 1.5, 2800, 0.02), 0.5, re
 add(music, LOGO, pad([50, 57, 62], 0.5, 1200, 0.3), 0.25, rev=0.5)
 
 # ---- mix -----------------------------------------------------------------------------
-tline = np.arange(N) / SR
-duck = np.ones(N)
-for st in kicks:  # sidechain pump from the kick
-    m = (tline >= st) & (tline < st + 0.5)
-    duck[m] -= 0.65 * np.exp(-(tline[m] - st) * 10)
-duck = np.clip(duck, 0.3, 1)[:, None]
+def env_follow(x, att, rel, step=32):
+    """Peak envelope with separate attack/release (seconds), computed at a reduced rate then interpolated."""
+    d = maximum_filter1d(np.abs(x), step)[::step]
+    a, r = np.exp(-step / (att * SR)), np.exp(-step / (rel * SR))
+    e = np.empty_like(d)
+    v = 0.0
+    for i, s_ in enumerate(d):
+        v = a * v + (1 - a) * s_ if s_ > v else r * v + (1 - r) * s_
+        e[i] = v
+    return np.interp(np.arange(len(x)), np.arange(len(e)) * step, e)
 
-ir_t = tt(2.2)
+
+def compress(x, thr_db, ratio, att=0.005, rel=0.12, sidechain=None):
+    det = sidechain if sidechain is not None else (np.max(np.abs(x), axis=1) if x.ndim == 2 else x)
+    env = env_follow(det, att, rel)
+    over = np.maximum(20 * np.log10(env + 1e-9) - thr_db, 0)
+    g = 10 ** (-over * (1 - 1 / ratio) / 20)
+    return x * (g[:, None] if x.ndim == 2 else g)
+
+
+def limiter(x, ceiling=0.93, look=0.004):
+    """Look-ahead brickwall: gain is smoothed so it is already down when a peak arrives (no clipping)."""
+    L = int(look * SR) | 1
+    peak = maximum_filter1d(np.max(np.abs(x), axis=1), L)
+    g = np.minimum(1, ceiling / (peak + 1e-9))
+    g = uniform_filter1d(minimum_filter1d(g, 2 * L), 2 * L)
+    return x * g[:, None]
+
+
+def peq(x, f, gain_db, q=0.9):
+    """RBJ peaking EQ."""
+    A, w = 10 ** (gain_db / 40), 2 * np.pi * f / SR
+    al = np.sin(w) / (2 * q)
+    b = [1 + al * A, -2 * np.cos(w), 1 - al * A]
+    a = [1 + al / A, -2 * np.cos(w), 1 - al / A]
+    sos = np.array([[*(np.array(b) / a[0]), 1, a[1] / a[0], a[2] / a[0]]])
+    return sosfilt(sos, x, axis=0)
+
+
+tline = np.arange(N) / SR
+# kick sidechain: smooth cosine-shaped pump on music only
+duck = np.ones(N)
+for st in kicks:
+    m = (tline >= st) & (tline < st + 0.3)
+    u = (tline[m] - st) / 0.3
+    duck[m] = np.minimum(duck[m], 1 - 0.55 * (0.5 + 0.5 * np.cos(np.pi * u)))
+duck = duck[:, None]
+
+# stereo reverb: decorrelated noise IR with early reflections and 25 ms pre-delay, low-cut return
+ir_t = tt(2.4)
 rev = np.zeros((N, 2))
+pre = int(0.025 * SR)
 for ch in range(2):
-    ir = filt(rng.standard_normal(len(ir_t)) * np.exp(-ir_t / 0.45), "lowpass", 6000)
-    rev[:, ch] = fftconvolve(send[:, ch], ir)[:N] * 0.035
+    ir = filt(rng.standard_normal(len(ir_t)) * np.exp(-ir_t / 0.5), "lowpass", 7000)
+    for d_, g_ in [(0.011, 0.5), (0.019, 0.35), (0.027, 0.3), (0.041, 0.2)]:
+        ir[int((d_ + ch * 0.003) * SR)] += g_ * 25
+    ir = np.concatenate([np.zeros(pre), ir])
+    rev[:, ch] = fftconvolve(send[:, ch], ir)[:N] * 0.03
+rev = sosfilt(butter(2, 220, "highpass", fs=SR, output="sos"), rev, axis=0)
+
+# drum bus glue
+drums = compress(drums, -14, 2.5, 0.003, 0.08)
 
 vo_path = os.path.join(OUT, "vo.npy")
 if os.path.exists(vo_path):
-    vo = filt(np.load(vo_path)[:N], "highpass", 100)
-    vo = filt(vo, "highpass", 2500) * 0.35 + vo                     # presence
-    vo = np.tanh(vo * 2.4) / np.tanh(2.4) * 0.9                     # trailer-style saturation
-    win = int(0.12 * SR)
-    env = np.convolve(np.abs(vo), np.ones(win) / win, mode="same")
-    vo_duck = (1 - 0.6 * np.clip(env / 0.12, 0, 1))[:, None]        # auto-duck the bed under the voice
-    ir = filt(rng.standard_normal(len(ir_t)) * np.exp(-ir_t / 0.22), "lowpass", 5000)
-    vo_rev = fftconvolve(vo, ir)[:N] * 0.005
-    vo = np.stack([vo + vo_rev, vo + vo_rev * 0.8], axis=1)
+    vo = np.load(vo_path)[:N]
+    vo = sosfilt(butter(4, 85, "highpass", fs=SR, output="sos"), vo)
+    # de-esser: compress only when the 5-9 kHz band is hot
+    sib = filt(vo, "bandpass", [5000, 9000])
+    vo = vo - sib + compress(sib, -30, 4, 0.001, 0.05)
+    vo = compress(vo, -20, 3, 0.004, 0.15)                    # even out level without colouring
+    vo = peq(vo, 180, -1.5, 0.8)                              # less boom
+    vo = peq(vo, 3200, 2.0, 0.9)                              # presence / intelligibility
+    vo /= np.max(np.abs(vo)) + 1e-9
+    # auto-duck the bed under the voice: -11 dB, 40 ms attack, 300 ms release
+    env = env_follow(vo, 0.04, 0.3)
+    vo_duck = (10 ** (-11 * np.clip(env / 0.2, 0, 1) / 20))[:, None]
+    vrev = fftconvolve(vo, filt(rng.standard_normal(int(0.8 * SR)) * np.exp(-tt(0.8) / 0.18), "lowpass", 6000))[:N] * 0.004
+    vo = np.stack([vo + vrev, vo + vrev * 0.85], axis=1)
 else:
     vo_duck, vo = 1.0, np.zeros((N, 2))
 
-bed = drums * 0.85 + music * duck + fx * 0.8 + rev
-mix = bed * vo_duck + vo * 1.25
-mix = filt(mix.T, "highpass", 28).T
-mix = np.tanh(mix * 1.15)
+bed = drums * 0.8 + music * duck * 0.9 + fx * 0.75 + rev
+mix = bed * vo_duck * 0.5 + vo * 0.75
+mix = sosfilt(butter(4, 30, "highpass", fs=SR, output="sos"), mix, axis=0)
+mix = peq(mix, 300, -1.5, 0.7)          # clear low-mid mud
+mix = peq(mix, 11000, 1.5, 0.6)         # air
+mix = compress(mix, -12, 2, 0.01, 0.2)  # gentle glue
 mix *= np.clip((DUR - tline) / 0.45, 0, 1)[:, None]
-mix /= np.max(np.abs(mix)) / 0.89
+mix *= 0.9 / np.max(np.abs(mix))
+mix = limiter(mix * 1.3, 0.93)
 
 os.makedirs(OUT, exist_ok=True)
+pcm = np.clip(mix, -1, 1) * 32767 + rng.uniform(-0.5, 0.5, mix.shape) + rng.uniform(-0.5, 0.5, mix.shape)  # TPDF dither
 with wave.open(os.path.join(OUT, "audio.wav"), "wb") as w:
     w.setnchannels(2)
     w.setsampwidth(2)
     w.setframerate(SR)
-    w.writeframes((mix * 32767).astype("<i2").tobytes())
-print("wrote", os.path.join(OUT, "audio.wav"))
+    w.writeframes(np.round(pcm).astype("<i2").tobytes())
+print("wrote", os.path.join(OUT, "audio.wav"), "peak", round(float(np.max(np.abs(mix))), 3))
