@@ -12,7 +12,9 @@ from scipy.signal import resample_poly
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MODELS = os.environ.get("KOKORO_DIR", os.path.join(HERE, "models"))
-VOICE = os.environ.get("VO_VOICE", "em_alex")
+# Spanish male voice blended with a brighter young male voice: younger timbre, Spanish diction kept.
+VOICE_MIX = {"em_alex": 0.65, "am_eric": 0.35}
+BASE_SPEED = 1.12
 SR = 44100
 DUR = 20.0
 
@@ -41,11 +43,12 @@ def trim(x, sr, thresh=0.01):
 
 def main():
     k = Kokoro(os.path.join(MODELS, "kokoro-v1.0.onnx"), os.path.join(MODELS, "voices-v1.0.bin"))
+    voice = sum(k.get_voice_style(name) * w for name, w in VOICE_MIX.items())
     out = np.zeros(int(SR * DUR))
     for start, end, text in LINES:
-        speed = 1.05
+        speed = BASE_SPEED
         for _ in range(3):
-            s, sr = k.create(text, voice=VOICE, speed=speed, lang="es")
+            s, sr = k.create(text, voice=voice, speed=speed, lang="es")
             s = trim(np.asarray(s, dtype=np.float64), sr)
             dur = len(s) / sr
             if dur <= end - start or speed >= 1.6:
