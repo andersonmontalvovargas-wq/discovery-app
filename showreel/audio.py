@@ -255,7 +255,23 @@ for ch in range(2):
     ir = filt(ir, "lowpass", 6000)
     rev[:, ch] = fftconvolve(send[:, ch], ir)[:N] * 0.035
 
-mix = drums + music * duck + fx + rev
+# voice-over (from voiceover.py): duck the bed under it, add a touch of room
+vo_path = os.path.join(OUT, "vo.npy")
+vo = np.zeros(N)
+if os.path.exists(vo_path):
+    vo = np.load(vo_path)[:N]
+    vo = filt(vo, "highpass", 90)
+    vo = np.tanh(vo * 2.2) / np.tanh(2.2) * 0.9
+    env = np.convolve(np.abs(vo), np.ones(int(0.12 * SR)) / int(0.12 * SR), mode="same")
+    vo_duck = (1 - 0.65 * np.clip(env / 0.15, 0, 1))[:, None]
+    ir = rng.standard_normal(len(ir_t)) * np.exp(-ir_t / 0.25)
+    vo_rev = fftconvolve(vo, filt(ir, "lowpass", 5000))[:N] * 0.004
+    vo = np.stack([vo + vo_rev, vo + vo_rev * 0.8], axis=1)
+else:
+    vo_duck = 1.0
+    vo = np.zeros((N, 2))
+
+mix = (drums * 0.85 + music * duck + fx * 0.85 + rev) * vo_duck + vo * 1.2
 mix = filt(mix.T, "highpass", 28).T
 mix = np.tanh(mix * 1.1)
 fade = np.clip((DUR - tline) / 0.35, 0, 1)[:, None]
